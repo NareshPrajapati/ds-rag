@@ -1,47 +1,45 @@
-"""Centralised, environment-driven configuration."""
-from __future__ import annotations
-
+import os
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="RAG_", env_file=".env", extra="ignore")
+    """Application configuration loaded from environment variables and .env."""
 
-    # Paths
-    data_dir: Path = Path("data")
-    chroma_dir: Path = Path("artifacts/chroma")
-    embedding_cache_dir: Path = Path("artifacts/embeddings")
-    collection_name: str = "financial_reports_v1"
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
+    )
 
-    # Models
-    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
-    openai_model: str = "gpt-4.1-mini"
+    data_dir: Path = Field(default=Path("data"))
+    chroma_dir: Path = Field(default=Path("artifacts/chroma"))
 
-    # Chunking
-    chunk_size: int = 1000
-    chunk_overlap: int = 150
+    # Two models: one embeds chunks for the vector store, a separate HuggingFace
+    # cross-encoder reranks the retrieved candidates.
+    embedding_model: str = Field(default="sentence-transformers/all-MiniLM-L6-v2")
+    reranker_model: str = Field(default="cross-encoder/ms-marco-MiniLM-L-6-v2")
+    openai_model: str = Field(default="gpt-4.1-mini")
+    openai_api_key: str | None = Field(default="123")
 
-    # Retrieval
-    semantic_top_k: int = 12
-    keyword_top_k: int = 12
-    final_top_k: int = 6
+    collection_name: str = Field(default="financial_reports")
+    chunk_size: int = Field(default=1_000, gt=0)
+    chunk_overlap: int = Field(default=150, ge=0)
+
+    # Retrieve a wider candidate set from the vector store, then rerank down to top_k.
+    retrieve_candidates: int = Field(default=20, gt=0)
+    top_k: int = Field(default=6, gt=0)
 
     @property
     def openai_enabled(self) -> bool:
-        import os
-
-        return bool(os.getenv("OPENAI_API_KEY"))
-
-    def ensure_dirs(self) -> None:
-        self.chroma_dir.mkdir(parents=True, exist_ok=True)
-        self.embedding_cache_dir.mkdir(parents=True, exist_ok=True)
+        return bool(self.openai_api_key)
 
 
 @lru_cache
 def get_settings() -> Settings:
     settings = Settings()
-    settings.ensure_dirs()
+    # Make the key available to the OpenAI client when it is only set in .env.
+    if settings.openai_api_key:
+        os.environ.setdefault("OPENAI_API_KEY", settings.openai_api_key)
     return settings
